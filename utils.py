@@ -1,4 +1,5 @@
 import random
+from math import sqrt
 import math
 import os
 import itertools
@@ -44,6 +45,10 @@ def update_routing_table(X, A):
 	min_A_leaf_set, ind = get_min_leaf_set(A)
 	max_A_leaf_set, ind = get_max_leaf_set(A)
 
+	if not min_A_leaf_set and not max_A_leaf_set:
+		update_leaf_set(X, A)
+		return
+
 	if not min_A_leaf_set:
 		min_A_leaf_set = A
 	if not max_A_leaf_set:
@@ -51,8 +56,11 @@ def update_routing_table(X, A):
 
 	if min_A_leaf_set.node_id <= X.node_id <= max_A_leaf_set.node_id:
 		closest_node = get_closest_node_leaf_set(X, A)
-		if get_key_distance(X, A) < get_key_distance(X, closest_node):
+		if closest_node == A:
 			update_leaf_set(X, A)
+			return
+		else:
+			update_routing_table(X, closest_node)
 			return
 	else:
 		l = shl(X.node_id, A.node_id)
@@ -65,7 +73,7 @@ def update_routing_table(X, A):
 			T_set += flatten_routing_table
 			T_set = set(T_set)
 			T_set.discard(None)
-
+			T_set.discard(A)
 			for t in T_set:
 				if shl(t.node_id, X.node_id) >= l and get_key_distance(t, X) < get_key_distance(A, X):
 					update_routing_table(X, t)
@@ -80,17 +88,29 @@ def update_others(X):
 	T_set += flatten_routing_table
 	T_set = set(T_set)
 	T_set.discard(None)
+	T_set.discard(X)
 
 	for t in T_set:
 		if X.node_id < t.node_id:
-			min_node, min_index = get_min_leaf_set(t)
-			t.smaller_leaf_set[min_index] = X
+			if None in t.smaller_leaf_set:
+				none_index = t.smaller_leaf_set.index(None)
+				t.smaller_leaf_set[none_index] = X
+			else:
+				min_node, min_index = get_min_leaf_set(t)
+				if min_node.node_id < X.node_id:
+					t.smaller_leaf_set[min_index] = X
 
 		if X.node_id > t.node_id:
-			max_node, max_index = get_max_leaf_set(t)
-			t.larger_leaf_set[max_index] = X
+			if None in t.larger_leaf_set:
+				none_index = t.larger_leaf_set.index(None)
+				t.larger_leaf_set[none_index] = X
+			else:
+				max_node, max_index = get_max_leaf_set(t)
+				if max_node.node_id > X.node_id:
+					t.larger_leaf_set[max_index] = X
 
 		l = shl(X.node_id, t.node_id)
+
 		if not t.routing_table[l][int(X.node_id[l], 16)]:
 			t.routing_table[l][int(X.node_id[l], 16)] = X
 
@@ -114,12 +134,87 @@ def update_leaf_set(X, Z):
 	X.larger_leaf_set = [x for x in Z.larger_leaf_set]
 
 	if Z.node_id < X.node_id:
-		min_node, min_index = get_min_leaf_set(Z)
-		X.smaller_leaf_set[min_index] = Z
+		if None in X.smaller_leaf_set:
+			none_index = X.smaller_leaf_set.index(None)
+			X.smaller_leaf_set[none_index] = Z
+		else:
+			min_node, min_index = get_min_leaf_set(Z)
+			if get_key_distance(Z, X) < get_key_distance(min_node, X):
+				X.smaller_leaf_set[min_index] = Z
 
 	if Z.node_id > X.node_id:
-		max_node, max_index = get_max_leaf_set(Z)
-		X.larger_leaf_set[max_index] = Z
+		if None in X.larger_leaf_set:
+			none_index = X.larger_leaf_set.index(None)
+			X.larger_leaf_set[none_index] = Z
+		else:
+			max_node, max_index = get_max_leaf_set(Z)
+			if get_key_distance(Z, X) < get_key_distance(max_node, X):
+				X.larger_leaf_set[max_index] = Z
+
+def remove_node(nodes, X):
+	for node in nodes:
+		# Repair leaf set
+		if X in node.larger_leaf_set:
+			X_index = node.larger_leaf_set.index(X)
+			node.larger_leaf_set[X_index] = None
+
+			max_node, max_index = get_max_leaf_set(node)
+			if max_node:
+				leaf_set = max_node.smaller_leaf_set + max_node.larger_leaf_set
+				eligible_leaf = []
+				for leaf in leaf_set:
+					if leaf not in node.larger_leaf_set and leaf != node and leaf.node_id > node.node_id:
+						eligible_leaf.append(leaf)
+				closest_node = get_closest_node_wrt_key(eligible_leaf, node)
+				node.larger_leaf_set[X_index] = closest_node
+
+		elif X in node.smaller_leaf_set:
+			X_index = node.smaller_leaf_set.index(X)
+			node.smaller_leaf_set[X_index] = None
+
+			min_node, min_index = get_min_leaf_set(node)
+			if min_node:
+				leaf_set = min_node.smaller_leaf_set + min_node.larger_leaf_set
+				eligible_leaf = []
+				for leaf in leaf_set:
+					if leaf not in node.smaller_leaf_set and leaf != node and leaf.node_id < node.node_id:
+						eligible_leaf.append(leaf)
+				closest_node = get_closest_node_wrt_key(eligible_leaf, node)
+				node.smaller_leaf_set[X_index] = closest_node
+
+		# Repair neighborhood set
+		if X in node.neighborhood_set:
+			X_index = node.neighborhood_set.index(X)
+			node.neighborhood_set[X_index] = None
+
+			eligible_neighbors = []
+			for n1 in node.neighborhood_set:
+				for n2 in n1.neighborhood_set:
+					if n2 not in node.neighborhood_set and n2 != node:
+						eligible_neighbors.append(n2)
+
+			eligible_neighbors = list(set(eligible_neighbors))
+
+			closest_node = get_closest_node(eligible_neighbors, node)
+			node.neighborhood_set[X_index] = closest_node
+
+		# Repair routing table
+		for row_index, row in enumerate(node.routing_table):
+			if X in row:
+				col_index = row.index(X)
+				repair_routing_table_row(node, row_index, col_index)
+
+
+def repair_routing_table_row(node, row, col):
+	node.routing_table[row][col] = None
+	for r in range(row, len(node.routing_table)):
+		for c in range(len(node.routing_table[r])):
+			temp_node = node.routing_table[r][c]
+			if c != col and temp_node:
+				eligible_node = temp_node[row][col]
+				if eligible_node:
+					node.routing_table[row][col] = eligible_node
+					return
 
 def shl(x, y):
 	l = [x, y]
@@ -131,9 +226,9 @@ def get_min_leaf_set(A):
 	for index, node in enumerate(A.smaller_leaf_set):
 		if node:
 			if not min_node:
-				min_node = node:
+				min_node = node
 				min_index = index
-			elif min_node > node:
+			elif min_node.node_id > node.node_id:
 				min_node = node
 				min_index = index
 
@@ -145,9 +240,9 @@ def get_max_leaf_set(A):
 	for index, node in enumerate(A.larger_leaf_set):
 		if node:
 			if not max_node:
-				max_node = node:
+				max_node = node
 				max_index = index
-			elif max_node < node:
+			elif max_node.node_id < node.node_id:
 				max_node = node
 				max_index = index
 
@@ -157,14 +252,25 @@ def get_closest_node_leaf_set(X, A):
 	closest_node = None
 	min_dist = math.inf
 
-	for node in A.smaller_leaf_set + A.larger_leaf_set:
+	for node in A.smaller_leaf_set + A.larger_leaf_set + [A]:
 		if node:
 			dist = get_key_distance(X, node)
 			if dist < min_dist:
 				min_dist = dist
 				closest_node = node
 
-	return node
+	return closest_node
 
 def get_key_distance(a, b):
 	return abs(int(a.node_id, 16) - int(b.node_id, 16))
+
+def get_closest_node_wrt_key(nodes, X):
+	closest_node = None
+	min_dist = math.inf
+	for node in nodes:
+		dist = get_key_distance(X, node)
+		if dist < min_dist:
+			min_dist = dist
+			closest_node = node
+
+	return closest_node
